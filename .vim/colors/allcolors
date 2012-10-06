@@ -1,0 +1,188 @@
+#!/usr/local/bin/perl
+
+my $HOME = $ENV{HOME};
+my @rgbfile = ("/usr/openwin/lib/X11/rgb.txt", "$HOME/emacs/allcolors.el");
+
+$USAGE = "
+SYNOPSIS: Sort rgb.txt/allcolors.el by brightness and hue, for font-lock
+AUTHOR: GPL(C) Mohsin Ahmed, http://www.cs.albany.edu/~mosh
+USAGE:  perl allcolors.pl infile > outfile.
+OPTIONS:
+    -rgbfile=RGBFILE     Default is @rgbfile
+    -? -h                Help
+    -v -v                Verbose
+    -name RR GG BB       Find a name for Red=RR,Green=GG,Blue=BB.
+                            RR,GG,BB are Numbers 0..255
+                         warning not tuned or tested.
+OUTPUT FORMAT:
+ \"medium sea green\"          ; RGB( 60,179,113)
+ \"MediumSeaGreen\"            ; RGB( 60,179,113)
+Example:
+  > allcolors.pl -v -name 121 12 231
+  > allcolors.pl    -name \\#8080ff     .. value from .Xdefaults
+    bestname(121,12,231)=blue violet,BlueViolet,blueviolet,BlueViolet
+";
+
+die $USAGE unless @ARGV;
+while( $_ = $ARGV[0],  m/^-/ ){ shift;
+        if(     m/^--$/   ){ last;
+        }elsif( m/^-opt/  ){
+        }elsif( m/^-name/  ){
+            die "-name need RR GG BB values\n"
+                unless "@ARGV" =~ m/./; # >= 3;
+            $namer = shift;
+            if( $namer =~ /^#(..)(..)(..)$/ ){
+                $namer = hex( $1 );
+                $nameg = hex( $2 );
+                $nameb = hex( $3 );
+            }else{
+                $nameg = shift;
+                $nameb = shift;
+            }
+        }elsif( m/^-rgbfile=(.+)/  ){ push( @rgbfile, $1 );
+        }elsif( m/^-[h?]/ ){ die $USAGE;
+        }elsif( m/^-v/    ){ $verbose++;
+        }else{ die "Unknown option '$_'\n";
+        }
+}
+
+
+my $infile = readablefile( @rgbfile);
+
+
+my( %name, %red, %green, %blue, %bright, %hue );
+readrgbfile( $infile );
+
+if( defined $namer ){
+    my $bestname = "";
+    my $dist = 1e10;
+    foreach (keys %name) {
+        my ($thisr,$thisg,$thisb)=($red{$_},$green{$_},$blue{$_});
+        my $thisdiff = ( 
+                            # warn "TODO: not tuned or tested.\n";
+                            + (abs($namer-$thisr)*2)
+                            + (abs($nameg-$thisg)*2)
+                            + (abs($nameb-$thisb)*2)
+                       );
+        if( $thisdiff == $dist ){
+            $bestname .= ",". $name{$_};
+        }elsif( $thisdiff < $dist ){
+            $dist = $thisdiff;
+            $bestname = $name{$_};
+            printf STDERR 
+                "bestname(%3d,%3d,%3d)=<%-21s>, dist=%6g from %8s=(%3d,%3d,%3d)\n",
+                    $namer,$nameg,$nameb,$bestname,
+                    $dist,$_,$thisr,$thisg,$thisb
+                if $verbose;
+        }
+    }
+    print "bestname($namer,$nameg,$nameb)=$bestname\n";
+    exit;
+}
+
+
+
+print "\n\n;;",'-'x75,"\n;; Sorted by brightness\n";
+foreach (sort cmp_brightness keys %name) {
+    my @names = split( /,/, $name{$_} );
+    printf
+        "%-15s ; RGB(%03d,%03d,%03d) bright=%03d, names=%s\n",
+        bestname(@names),  # "\"$name{$_}\"",
+        $red{$_},$green{$_},$blue{$_},
+        $bright{$_},
+        join(',',@names)  # all names.
+            ;
+}
+
+print "\n\n;;",'-'x75,"\n;; Sorted by cmp_rgb, with hue\n";
+foreach (sort cmp_rgb keys %name) {
+    my @names = split( /,/, $name{$_} );
+    printf
+      "%-15s ; RGB(%03d,%03d,%03d) hue=%03d, names=%s\n",
+      bestname(@names),  # "\"$name{$_}\"",
+      $red{$_},$green{$_},$blue{$_},
+      $hue{$_} ||= hue($_),
+      join(',',@names)  # all names.
+          ;
+}
+
+# end of main.
+# ==============================
+
+sub readrgbfile {
+    # upadtes global: my( %name, %red, %green, %blue, %bright, %hue );
+    open( RGB, "<$infile" ) or
+        die $USAGE . "File $infile not readable.\n";
+    warn "reading infile=$infile\n" if $verbose;
+    while(<RGB>){
+        my($red,$green,$blue,$name);
+        if( m/^;?"(.*?)".*RGB\((.*)\)/ ){
+            ($name,$val) = ($1,$2);
+            $val =~ s/\s//g;
+            $val =~ m/(\d+),(\d+),(\d+)/;
+            ($red,$green,$blue) = ($1,$2,$3);
+        }elsif( m/\s*(\d+)\s*(\d+)\s*(\d+)\s*(\S+)/ ){
+            ($red,$green,$blue,$name) = ($1,$2,$3,$4);
+        }else{
+            next;
+        }
+
+        $rgbval  = sprintf("%02x%02x%02x", $red, $green, $blue );
+
+        warn "line=$.:name=$name(rgb=$rgbval)\n" if $verbose > 1;
+        # if already present, then add this as a comment.
+
+        if( $name{ $rgbval } ){
+        $name{ $rgbval } .= ",$name";
+        s/ //;
+        # print ";", $_;
+        next;
+        }
+
+        $name  { $rgbval } = $name;
+        $red   { $rgbval } = $red;
+        $green { $rgbval } = $green;
+        $blue  { $rgbval } = $blue;
+        $bright{ $rgbval } = $red + $blue + $green;
+
+    }
+    close RGB;
+}
+
+sub cmp_brightness { $bright{$b} - $bright{$a}; }
+
+# Here we sort on red first, then green, then blue,
+# but other permutations possible: cmp_ perm(r,g,b)
+
+sub cmp_rgb {
+                  ($red  {$b} -   $red  {$a}) ||
+                  ($green{$b} -   $green{$a}) ||
+                  ($blue {$b} -   $blue {$a}) ;}
+
+sub cmp_hue {
+            ($hue{$b} ||= hue($b))-
+            ($hue{$a} ||= hue($a));
+}
+sub hue {
+    my $x = shift;
+    sqrt($red{$x}**2+$green{$x}**2+$blue{$x}**2);
+}
+
+sub readablefile {
+    foreach(@_){
+        return $_ if -r $_;
+    }
+    die "no files readable:",join(',',@_),"\n";
+}
+
+# for color names, try to pick one without spaces and uppercase first.
+
+sub bestname {
+    foreach(@_){ return $_ unless m/\s/ or m/[A-Z]/ or m/\d/; }
+    foreach(@_){ return $_ unless m/\s/ or m/[A-Z]/         ; }
+    foreach(@_){ return $_ unless m/\s/                   ; }
+    foreach(@_){ return $_ unless          m/[A-Z]/         ; }
+    return shift();
+}
+
+# EOF.
